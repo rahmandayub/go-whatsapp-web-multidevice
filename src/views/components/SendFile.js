@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     props: {
         maxFileSize: {
             type: String,
@@ -68,6 +69,7 @@ export default {
                 let payload = new FormData();
                 payload.append("caption", this.caption)
                 payload.append("phone", this.phone_id)
+                payload.append("session_id", this.getCurrentSession())
                 payload.append("is_forwarded", this.is_forwarded)
                 if (this.duration && this.duration > 0) {
                     payload.append("duration", this.duration)

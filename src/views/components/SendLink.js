@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             type: window.TYPEUSER,
@@ -63,6 +64,7 @@ export default {
             try {
                 const payload = {
                     phone: this.phone_id,
+                    session_id: this.getCurrentSession(),
                     link: this.link.trim(),
                     caption: this.caption.trim(),
                     is_forwarded: this.is_forwarded,

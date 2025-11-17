@@ -42,15 +42,31 @@
         </h1>
     </div>
 
-    <div class="ui success message" v-if="connected_devices != null">
+    <div class="ui success message" v-if="connected_devices != null && connected_devices.length > 0">
         <div class="header">
             <i class="check circle icon"></i>
-            Device Connected Successfully
+            Connected Devices
         </div>
-        <p>
-            Device ID: <b>[[ connected_devices[0].device ]]</b>
-        </p>
+        <div class="ui relaxed divided list">
+            <div class="item" v-for="device in connected_devices" :key="device.device">
+                <i class="mobile alternate icon"></i>
+                <div class="content">
+                    <div class="description">
+                        <b>[[ device.device ]]</b>
+                        <span v-if="device.session_id" class="ui mini teal label" style="margin-left: 0.5em;">
+                            Session: [[ device.session_id ]]
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <div class="ui horizontal divider">
+        Sessions
+    </div>
+
+    <session-selector @session-changed="handleSessionChange"></session-selector>
 
     <div class="ui horizontal divider">
         App
@@ -229,6 +245,7 @@
     import ChatPinManager from "{{ .AppBasePath }}/components/ChatPinManager.js";
     import ChatList from "{{ .AppBasePath }}/components/ChatList.js";
     import ChatMessages from "{{ .AppBasePath }}/components/ChatMessages.js";
+    import SessionSelector from "{{ .AppBasePath }}/components/SessionSelector.js";
 
     const showErrorInfo = (message) => {
         $('body').toast({
@@ -264,18 +281,29 @@
             GroupList, GroupCreate, GroupJoinWithLink, GroupInfoFromLink, GroupAddParticipants, GroupSetPhoto, GroupSetName, GroupSetLocked, GroupSetAnnounce, GroupSetTopic, GroupGetInviteLink, GroupInfo,
             NewsletterList,
             AccountAvatar, AccountUserInfo, AccountPrivacy, AccountChangeAvatar, AccountContact, AccountChangePushName, AccountUserCheck, AccountBusinessProfile,
-            ChatPinManager, ChatList, ChatMessages
+            ChatPinManager, ChatList, ChatMessages,
+            SessionSelector
         },
         delimiters: ['[[', ']]'],
         data() {
             return {
                 app_ws: null,
                 connected_devices: null,
+                currentSession: 'default',
+            }
+        },
+        provide() {
+            return {
+                getCurrentSession: () => this.currentSession,
             }
         },
         methods: {
             handleReloadDevice() {
                 this.app_ws.send(JSON.stringify({"code": "FETCH_DEVICES"}))
+            },
+            handleSessionChange(sessionId) {
+                this.currentSession = sessionId;
+                console.log('Session changed to:', sessionId);
             }
         },
         mounted() {

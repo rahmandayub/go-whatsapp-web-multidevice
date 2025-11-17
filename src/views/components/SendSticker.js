@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             phone: '',
@@ -62,6 +63,7 @@ export default {
             try {
                 let payload = new FormData();
                 payload.append("phone", this.phone_id)
+                payload.append("session_id", this.getCurrentSession())
                 payload.append("is_forwarded", this.is_forwarded)
                 if (this.duration && this.duration > 0) {
                     payload.append("duration", this.duration)

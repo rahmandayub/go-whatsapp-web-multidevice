@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             type: window.TYPEUSER,
@@ -43,6 +44,7 @@ export default {
             try {
                 let payload = {
                     phone: this.phone_id,
+                    session_id: this.getCurrentSession(),
                     action: this.action
                 }
                 let response = await window.http.post(`/send/chat-presence`, payload)

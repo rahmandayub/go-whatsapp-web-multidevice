@@ -6,6 +6,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             phone: '',
@@ -67,6 +68,7 @@ export default {
             try {
                 const payload = {
                     phone: this.phone_id,
+                    session_id: this.getCurrentSession(),
                     question: this.question,
                     options: this.options,
                     max_answer: this.max_answer,
