@@ -118,21 +118,27 @@ func (sm *SessionManager) RemoveSession(sessionID string) error {
 	}
 
 	// Close database handles if they're still open
-	// Note: It's safe to call Close multiple times on sqlstore.Container
+	// Track which container we've closed to avoid double-closing if DB and KeysDB point to the same instance
+	var closedContainer *sqlstore.Container
+
 	if sessionCopy.DB != nil {
 		if err := sessionCopy.DB.Close(); err != nil {
 			logrus.Warnf("Failed to close main DB for session %s during removal: %v", sessionID, err)
 		} else {
 			logrus.Debugf("Closed main DB for session %s", sessionID)
 		}
+		closedContainer = sessionCopy.DB
 	}
 
-	if sessionCopy.KeysDB != nil {
+	// Only close KeysDB if it's not nil and not the same instance as DB
+	if sessionCopy.KeysDB != nil && sessionCopy.KeysDB != closedContainer {
 		if err := sessionCopy.KeysDB.Close(); err != nil {
 			logrus.Warnf("Failed to close keys DB for session %s during removal: %v", sessionID, err)
 		} else {
 			logrus.Debugf("Closed keys DB for session %s", sessionID)
 		}
+	} else if sessionCopy.KeysDB != nil && sessionCopy.KeysDB == closedContainer {
+		logrus.Debugf("Skipped closing keys DB for session %s (same instance as main DB)", sessionID)
 	}
 
 	logrus.Infof("Session %s removed from session manager (remaining sessions: %d)", sessionID, remainingCount)
