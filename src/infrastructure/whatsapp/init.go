@@ -100,17 +100,17 @@ func syncKeysDevice(ctx context.Context, db, keysDB *sqlstore.Container) {
 	}
 }
 
-// InitWaCLI initializes the WhatsApp client
-func InitWaCLI(ctx context.Context, storeContainer, keysStoreContainer *sqlstore.Container, chatStorageRepo domainChatStorage.IChatStorageRepository) *whatsmeow.Client {
+// initClientCore contains the shared initialization logic for WhatsApp clients
+// It handles device retrieval, configuration, and client creation but does not register event handlers
+func initClientCore(ctx context.Context, storeContainer, keysStoreContainer *sqlstore.Container, loggerName string) (*whatsmeow.Client, error) {
+	// Get first device from store
 	device, err := storeContainer.GetFirstDevice(ctx)
 	if err != nil {
-		log.Errorf("Failed to get device: %v", err)
-		panic(err)
+		return nil, fmt.Errorf("failed to get device: %w", err)
 	}
 
 	if device == nil {
-		log.Errorf("No device found")
-		panic("No device found")
+		return nil, fmt.Errorf("no device found")
 	}
 
 	// Configure device properties
@@ -118,15 +118,11 @@ func InitWaCLI(ctx context.Context, storeContainer, keysStoreContainer *sqlstore
 	store.DeviceProps.PlatformType = &config.AppPlatform
 	store.DeviceProps.Os = &osName
 
-	// Set global database reference for remote logout cleanup
-	db = storeContainer
-	keysDB = keysStoreContainer
-
 	// Configure a separated database for accelerating encryption caching
-	if keysDB != nil && device.ID != nil {
+	if keysStoreContainer != nil && device.ID != nil {
 		innerStore := sqlstore.NewSQLStore(keysStoreContainer, *device.ID)
 
-		syncKeysDevice(ctx, db, keysDB)
+		syncKeysDevice(ctx, storeContainer, keysStoreContainer)
 		device.Identities = innerStore
 		device.Sessions = innerStore
 		device.PreKeys = innerStore
@@ -135,16 +131,34 @@ func InitWaCLI(ctx context.Context, storeContainer, keysStoreContainer *sqlstore
 		device.PrivacyTokens = innerStore
 	}
 
-	// Create and configure the client
-	cli = whatsmeow.NewClient(device, waLog.Stdout("Client", config.WhatsappLogLevel, true))
-	cli.EnableAutoReconnect = true
-	cli.AutoTrustIdentity = true
+	// Create and configure the client with provided logger name
+	client := whatsmeow.NewClient(device, waLog.Stdout(loggerName, config.WhatsappLogLevel, true))
+	client.EnableAutoReconnect = true
+	client.AutoTrustIdentity = true
 
-	cli.AddEventHandler(func(rawEvt interface{}) {
+	return client, nil
+}
+
+// InitWaCLI initializes the WhatsApp client
+func InitWaCLI(ctx context.Context, storeContainer, keysStoreContainer *sqlstore.Container, chatStorageRepo domainChatStorage.IChatStorageRepository) *whatsmeow.Client {
+	// Use common initialization logic
+	client, err := initClientCore(ctx, storeContainer, keysStoreContainer, "Client")
+	if err != nil {
+		log.Errorf("Failed to initialize WhatsApp client: %v", err)
+		panic(err)
+	}
+
+	// Set global database reference for remote logout cleanup
+	db = storeContainer
+	keysDB = keysStoreContainer
+	cli = client
+
+	// Register non-session event handler
+	client.AddEventHandler(func(rawEvt interface{}) {
 		handler(ctx, rawEvt, chatStorageRepo)
 	})
 
-	return cli
+	return client
 }
 
 // UpdateGlobalClient updates the global cli variable with a new client instance
@@ -157,13 +171,57 @@ func UpdateGlobalClient(newCli *whatsmeow.Client, newDB *sqlstore.Container) {
 }
 
 // GetClient returns the current global client instance (alias for GetGlobalClient)
+// For backward compatibility with single-session code
 func GetClient() *whatsmeow.Client {
 	return cli
 }
 
 // Get DB instance
+// For backward compatibility with single-session code
 func GetDB() *sqlstore.Container {
 	return db
+}
+
+// InitWaCLIWithSession initializes a WhatsApp client for a specific session
+// This is the session-aware version of InitWaCLI
+func InitWaCLIWithSession(ctx context.Context, sessionID string, storeContainer, keysStoreContainer *sqlstore.Container, chatStorageRepo domainChatStorage.IChatStorageRepository) (*whatsmeow.Client, error) {
+	// Use common initialization logic with session-specific logger name
+	loggerName := fmt.Sprintf("Client-%s", sessionID)
+	client, err := initClientCore(ctx, storeContainer, keysStoreContainer, loggerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize client for session %s: %w", sessionID, err)
+	}
+
+	// Register session-aware event handler
+	client.AddEventHandler(func(rawEvt interface{}) {
+		handlerWithSession(ctx, sessionID, rawEvt, chatStorageRepo)
+	})
+
+	logrus.Infof("WhatsApp client initialized for session %s", sessionID)
+	return client, nil
+}
+
+// GetClientForSession returns a WhatsApp client for a specific session from the session manager
+func GetClientForSession(sessionID string) (*whatsmeow.Client, error) {
+	sm := GetSessionManager()
+	return sm.GetClient(sessionID)
+}
+
+// GetClientOrDefault returns a WhatsApp client for the given session ID, or the default session if empty.
+// DEPRECATED: Legacy global client fallback has been removed. All clients must be managed through SessionManager.
+// Returns an error if no sessions are available or if the requested session does not exist.
+func GetClientOrDefault(sessionID string) (*whatsmeow.Client, error) {
+	sm := GetSessionManager()
+
+	// If no session ID provided, use default
+	if sessionID == "" {
+		sessionID = sm.GetDefaultSession()
+		if sessionID == "" {
+			return nil, fmt.Errorf("no sessions available: please initialize at least one session through SessionManager")
+		}
+	}
+
+	return sm.GetClient(sessionID)
 }
 
 // GetConnectionStatus returns the current connection status of the global client
@@ -441,28 +499,37 @@ func handleRemoteLogout(ctx context.Context, chatStorageRepo domainChatStorage.I
 }
 
 // handler is the main event handler for WhatsApp events
+// This is the legacy handler for backward compatibility (uses "default" session)
 func handler(ctx context.Context, rawEvt any, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	handlerWithSession(ctx, "default", rawEvt, chatStorageRepo)
+}
+
+// handlerWithSession is the session-aware event handler for WhatsApp events
+func handlerWithSession(ctx context.Context, sessionID string, rawEvt any, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	// Store sessionID in context for downstream handlers using the documented context key
+	ctx = domainChatStorage.WithSessionID(ctx, sessionID)
+
 	switch evt := rawEvt.(type) {
 	case *events.DeleteForMe:
-		handleDeleteForMe(ctx, evt, chatStorageRepo)
+		handleDeleteForMeWithSession(ctx, sessionID, evt, chatStorageRepo)
 	case *events.AppStateSyncComplete:
 		handleAppStateSyncComplete(ctx, evt)
 	case *events.PairSuccess:
 		handlePairSuccess(ctx, evt)
 	case *events.LoggedOut:
-		handleLoggedOut(ctx, chatStorageRepo)
+		handleLoggedOutWithSession(ctx, sessionID, chatStorageRepo)
 	case *events.Connected, *events.PushNameSetting:
 		handleConnectionEvents(ctx)
 	case *events.StreamReplaced:
 		handleStreamReplaced(ctx)
 	case *events.Message:
-		handleMessage(ctx, evt, chatStorageRepo)
+		handleMessageWithSession(ctx, sessionID, evt, chatStorageRepo)
 	case *events.Receipt:
 		handleReceipt(ctx, evt)
 	case *events.Presence:
 		handlePresence(ctx, evt)
 	case *events.HistorySync:
-		handleHistorySync(ctx, evt, chatStorageRepo)
+		handleHistorySyncWithSession(ctx, sessionID, evt, chatStorageRepo)
 	case *events.AppState:
 		handleAppState(ctx, evt)
 	case *events.GroupInfo:
@@ -1065,3 +1132,147 @@ func handleGroupInfo(ctx context.Context, evt *events.GroupInfo) {
 		}(evt)
 	}
 }
+
+// Session-aware event handler wrappers
+
+// handleMessageWithSession handles message events with session awareness
+func handleMessageWithSession(ctx context.Context, sessionID string, evt *events.Message, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	// Call the original handler which stores the message and reads sessionID from context
+	handleMessage(ctx, evt, chatStorageRepo)
+}
+
+// handleDeleteForMeWithSession handles delete events with session awareness
+func handleDeleteForMeWithSession(ctx context.Context, sessionID string, evt *events.DeleteForMe, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	handleDeleteForMe(ctx, evt, chatStorageRepo)
+}
+
+// cleanupSessionFiles removes session-specific temporary files (QR codes, etc.)
+func cleanupSessionFiles(sessionID string) {
+	if sessionID == "" {
+		logrus.Warn("Cannot cleanup files for empty sessionID")
+		return
+	}
+
+	// Pattern 1: QR code images in qrcode directory
+	qrPattern := fmt.Sprintf("%s/%s*.png", config.PathQrCode, sessionID)
+	qrFiles, err := filepath.Glob(qrPattern)
+	if err != nil {
+		logrus.Warnf("Failed to glob QR code files for session %s: %v", sessionID, err)
+	} else {
+		for _, file := range qrFiles {
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				logrus.Warnf("Failed to remove QR code file %s: %v", file, err)
+			} else {
+				logrus.Debugf("Removed QR code file: %s", file)
+			}
+		}
+	}
+
+	// Pattern 2: Session database files in storages directory
+	dbPattern := fmt.Sprintf("%s/%s*.db", config.PathStorages, sessionID)
+	dbFiles, err := filepath.Glob(dbPattern)
+	if err != nil {
+		logrus.Warnf("Failed to glob database files for session %s: %v", sessionID, err)
+	} else {
+		for _, file := range dbFiles {
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				logrus.Warnf("Failed to remove database file %s: %v", file, err)
+			} else {
+				logrus.Debugf("Removed database file: %s", file)
+			}
+		}
+	}
+
+	// Pattern 3: WAL and SHM files (SQLite journal files)
+	walPattern := fmt.Sprintf("%s/%s*.db-wal", config.PathStorages, sessionID)
+	walFiles, err := filepath.Glob(walPattern)
+	if err == nil {
+		for _, file := range walFiles {
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				logrus.Warnf("Failed to remove WAL file %s: %v", file, err)
+			}
+		}
+	}
+
+	shmPattern := fmt.Sprintf("%s/%s*.db-shm", config.PathStorages, sessionID)
+	shmFiles, err := filepath.Glob(shmPattern)
+	if err == nil {
+		for _, file := range shmFiles {
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				logrus.Warnf("Failed to remove SHM file %s: %v", file, err)
+			}
+		}
+	}
+
+	logrus.Infof("Cleaned up files for session %s", sessionID)
+}
+
+// cleanupSessionResources closes session DB handles and removes temporary files
+func cleanupSessionResources(sessionID string) {
+	if sessionID == "" {
+		logrus.Warn("Cannot cleanup resources for empty sessionID")
+		return
+	}
+
+	sm := GetSessionManager()
+
+	// Get the session to access its DB handles
+	session, err := sm.GetSession(sessionID)
+	if err != nil {
+		logrus.Warnf("Failed to get session %s for resource cleanup: %v", sessionID, err)
+		// Continue with file cleanup even if we can't get the session
+	} else {
+		// Close database handles if they're still open
+		if session.DB != nil {
+			if err := session.DB.Close(); err != nil {
+				logrus.Warnf("Failed to close main DB for session %s: %v", sessionID, err)
+			} else {
+				logrus.Debugf("Closed main DB for session %s", sessionID)
+			}
+		}
+
+		if session.KeysDB != nil {
+			if err := session.KeysDB.Close(); err != nil {
+				logrus.Warnf("Failed to close keys DB for session %s: %v", sessionID, err)
+			} else {
+				logrus.Debugf("Closed keys DB for session %s", sessionID)
+			}
+		}
+	}
+
+	// Remove session-specific temporary files
+	cleanupSessionFiles(sessionID)
+
+	logrus.Infof("Cleaned up resources for session %s", sessionID)
+}
+
+// handleLoggedOutWithSession handles logout events with session awareness
+func handleLoggedOutWithSession(ctx context.Context, sessionID string, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	logrus.Infof("Session %s logged out, starting cleanup...", sessionID)
+
+	sm := GetSessionManager()
+
+	// Step 1: Clean up chat storage data
+	if chatStorageRepo != nil {
+		if err := chatStorageRepo.DeleteSessionData(sessionID); err != nil {
+			logrus.Errorf("Failed to delete chat storage data for session %s: %v", sessionID, err)
+		}
+	}
+
+	// Step 2: Close DB handles and remove temporary files
+	cleanupSessionResources(sessionID)
+
+	// Step 3: Remove session from manager (disconnect client and clean up session state)
+	if err := sm.RemoveSession(sessionID); err != nil {
+		logrus.Errorf("Failed to remove session %s from manager: %v", sessionID, err)
+		return
+	}
+
+	logrus.Infof("Session %s cleanup completed", sessionID)
+}
+
+// handleHistorySyncWithSession handles history sync events with session awareness
+func handleHistorySyncWithSession(ctx context.Context, sessionID string, evt *events.HistorySync, chatStorageRepo domainChatStorage.IChatStorageRepository) {
+	handleHistorySync(ctx, evt, chatStorageRepo)
+}
+
