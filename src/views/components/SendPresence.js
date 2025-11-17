@@ -1,5 +1,6 @@
 export default {
     name: 'SendPresence',
+    inject: ['getCurrentSession'],
     data() {
         return {
             type: 'available',
@@ -31,7 +32,8 @@ export default {
             this.loading = true;
             try {
                 let payload = {
-                    type: this.type
+                    type: this.type,
+                    session_id: this.getCurrentSession()
                 }
                 let response = await window.http.post(`/send/presence`, payload)
                 return response.data.message;

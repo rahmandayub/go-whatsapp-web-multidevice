@@ -6,12 +6,14 @@ export default {
             default: [],
         }
     },
+    inject: ['getCurrentSession'],
     watch: {
         connected: function(val) {
             if (val) {
                 // reset form
                 this.phone = '';
                 this.pair_code = null;
+                this.session_id = '';
 
                 $('#modalLoginWithCode').modal('hide');
             }
@@ -22,6 +24,7 @@ export default {
             phone: '',
             submitting: false,
             pair_code: null,
+            session_id: '',
         };
     },
     methods: {
@@ -42,11 +45,17 @@ export default {
             if (this.submitting) return;
             try {
                 this.submitting = true;
-                const { data } = await http.get(`/app/login-with-code`, {
-                    params: {
-                        phone: this.phone,
-                    },
-                });
+
+                // Use the session_id if provided, otherwise use current session
+                const sessionParam = this.session_id || this.getCurrentSession();
+                const params = {
+                    phone: this.phone,
+                };
+                if (sessionParam && sessionParam !== 'default') {
+                    params.session = sessionParam;
+                }
+
+                const { data } = await http.get(`/app/login-with-code`, { params });
                 this.pair_code = data.results.pair_code;
             } catch (err) {
                 if (err.response) {
@@ -87,6 +96,13 @@ export default {
             </div>
             
             <div class="ui form">
+                <div class="field">
+                    <label>Session ID (Optional)</label>
+                    <input v-model="session_id" type="text"
+                           placeholder="Leave empty for default session or enter custom session name"
+                           aria-label="session_id" :disabled="submitting">
+                    <small>Enter a unique name for this WhatsApp session (e.g., "work", "personal").</small>
+                </div>
                 <div class="field">
                     <label>Phone</label>
                     <input type="text" v-model="phone" placeholder="Type your phone number"

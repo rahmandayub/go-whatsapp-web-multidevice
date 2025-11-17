@@ -3,11 +3,13 @@ export default {
     props: {
         connected: null,
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             login_link: '',
             login_duration_sec: 0,
             countdown_timer: null,
+            session_id: '',
         }
     },
     methods: {
@@ -32,12 +34,16 @@ export default {
             try {
                 // Stop existing countdown before making new request
                 this.stopCountdown();
-                
-                let response = await window.http.get(`app/login`)
+
+                // Use the session_id if provided, otherwise use current session
+                const sessionParam = this.session_id || this.getCurrentSession();
+                const params = sessionParam && sessionParam !== 'default' ? { session: sessionParam } : {};
+
+                let response = await window.http.get(`app/login`, { params })
                 let results = response.data.results;
                 this.login_link = results.qr_link;
                 this.login_duration_sec = results.qr_duration;
-                
+
                 // Start countdown after successful API call
                 this.startCountdown();
             } catch (error) {
@@ -97,6 +103,17 @@ export default {
         <i class="close icon"></i>
         <div class="header">
             Login Whatsapp
+        </div>
+        <div class="content">
+            <div class="ui form">
+                <div class="field">
+                    <label>Session ID (Optional)</label>
+                    <input v-model="session_id" type="text"
+                           placeholder="Leave empty for default session or enter custom session name"
+                           aria-label="session_id">
+                    <small>Enter a unique name for this WhatsApp session (e.g., "work", "personal"). Leave empty to use the default session.</small>
+                </div>
+            </div>
         </div>
         <div class="image content">
             <div class="ui medium image">

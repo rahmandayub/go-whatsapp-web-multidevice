@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     data() {
         return {
             type: window.TYPEUSER,
@@ -60,7 +61,8 @@ export default {
                 const payload = {
                     phone: this.phone_id,
                     message: this.text.trim(),
-                    is_forwarded: this.is_forwarded
+                    is_forwarded: this.is_forwarded,
+                    session_id: this.getCurrentSession()
                 };
                 if (this.reply_message_id !== '') {
                     payload.reply_message_id = this.reply_message_id;

@@ -5,6 +5,7 @@ export default {
     components: {
         FormRecipient
     },
+    inject: ['getCurrentSession'],
     props: {
         maxVideoSize: {
             type: String,
@@ -91,6 +92,7 @@ export default {
             try {
                 let payload = new FormData();
                 payload.append("phone", this.phone_id)
+                payload.append("session_id", this.getCurrentSession())
                 payload.append("caption", this.caption.trim())
                 payload.append("view_once", this.view_once)
                 payload.append("compress", this.compress)
