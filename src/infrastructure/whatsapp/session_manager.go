@@ -1,7 +1,6 @@
 package whatsapp
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -23,9 +22,9 @@ type Session struct {
 
 // SessionManager manages multiple WhatsApp sessions
 type SessionManager struct {
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	default  string // Default session ID
+	sessions       map[string]*Session
+	mu             sync.RWMutex
+	defaultSession string // Default session ID
 }
 
 // Global session manager instance
@@ -63,7 +62,7 @@ func (sm *SessionManager) AddSession(sessionID string, client *whatsmeow.Client,
 
 	// Set as default if it's the first session
 	if len(sm.sessions) == 1 {
-		sm.default = sessionID
+		sm.defaultSession = sessionID
 		logrus.Infof("Session %s set as default session", sessionID)
 	}
 
@@ -90,8 +89,8 @@ func (sm *SessionManager) RemoveSession(sessionID string) error {
 
 	// Update default session if removed
 	remainingCount := len(sm.sessions)
-	if sm.default == sessionID {
-		sm.default = ""
+	if sm.defaultSession == sessionID {
+		sm.defaultSession = ""
 		// Set a new default from remaining sessions (deterministically)
 		if remainingCount > 0 {
 			// Gather remaining session IDs into a slice
@@ -102,8 +101,8 @@ func (sm *SessionManager) RemoveSession(sessionID string) error {
 			// Sort for deterministic selection
 			sort.Strings(sessionIDs)
 			// Pick the first session alphabetically as the new default
-			sm.default = sessionIDs[0]
-			logrus.Infof("Session %s set as new default session", sm.default)
+			sm.defaultSession = sessionIDs[0]
+			logrus.Infof("Session %s set as new default session", sm.defaultSession)
 		}
 	}
 
@@ -180,7 +179,7 @@ func (sm *SessionManager) GetDB(sessionID string) (*sqlstore.Container, error) {
 func (sm *SessionManager) GetDefaultSession() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return sm.default
+	return sm.defaultSession
 }
 
 // SetDefaultSession sets the default session
@@ -192,7 +191,7 @@ func (sm *SessionManager) SetDefaultSession(sessionID string) error {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
 
-	sm.default = sessionID
+	sm.defaultSession = sessionID
 	logrus.Infof("Default session set to %s", sessionID)
 	return nil
 }
@@ -233,7 +232,7 @@ func (sm *SessionManager) GetAllSessionsWithStatus() []map[string]interface{} {
 			"is_connected": isConnected,
 			"is_logged_in": isLoggedIn,
 			"device_id":    deviceID,
-			"is_default":   id == sm.default,
+			"is_default":   id == sm.defaultSession,
 		})
 	}
 
